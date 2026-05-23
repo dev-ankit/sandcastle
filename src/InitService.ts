@@ -220,6 +220,17 @@ ANTHROPIC_API_KEY=`,
 OPENAI_KEY=`,
   },
   {
+    name: "codex-app-server",
+    label: "Codex app-server",
+    defaultModel: "gpt-5.5",
+    factoryImport: "codexAppServer",
+    dockerfileTemplate: CODEX_DOCKERFILE,
+    envExample: `# Optional OpenAI API key fallback.
+# To use Codex ChatGPT auth, mount ~/.codex/auth.json into the sandbox
+# and set CODEX_HOME to that mounted directory.
+OPENAI_API_KEY=`,
+  },
+  {
     name: "opencode",
     label: "OpenCode",
     defaultModel: "opencode/big-pickle",

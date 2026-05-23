@@ -16,6 +16,26 @@ A TypeScript library for orchestrating AI coding agents in isolated sandboxes:
 
 Sandcastle is provider-agnostic — it ships with built-in providers for Docker, Podman, and Vercel, and you can create your own. Great for parallelizing multiple AFK agents, creating review pipelines, or even just orchestrating your own agents.
 
+## Fork Status
+
+This fork, `dev-ankit/sandcastle`, is based on the original
+[Sandcastle](https://github.com/mattpocock/sandcastle) project by Matt Pocock.
+The core library, API shape, orchestration model, and original documentation
+come from that project and its contributors.
+
+Changes in this fork:
+
+- Adds a `codexAppServer()` agent provider that runs
+  `codex app-server --listen stdio://`.
+- Adds the packaged runner subpath
+  `@ai-hero/sandcastle/codex-app-server-runner`.
+- Adds `sandcastle init --agent codex-app-server` with `gpt-5.5` as the
+  default model.
+- Supports reusing mounted Codex ChatGPT auth from `~/.codex/auth.json`, with
+  `OPENAI_API_KEY` as an optional fallback.
+- Builds `dist` during Git dependency installation so the fork can be installed
+  directly from GitHub.
+
 ## Prerequisites
 
 - [Git](https://git-scm.com/)
@@ -24,6 +44,54 @@ Sandcastle is provider-agnostic — it ships with built-in providers for Docker,
   - [Podman](https://podman.io/) — rootless alternative to Docker
   - [Vercel](https://vercel.com/) — cloud-based Firecracker microVMs via `@vercel/sandbox`
   - Or [create your own](#custom-sandbox-providers) using `createBindMountSandboxProvider` or `createIsolatedSandboxProvider`
+
+## Install This Fork
+
+Install the fork under the normal package name:
+
+```bash
+npm install --save-dev '@ai-hero/sandcastle@github:dev-ankit/sandcastle#ank/codex-app-server-agent' tsx
+```
+
+With pnpm:
+
+```bash
+pnpm add --save-dev '@ai-hero/sandcastle@github:dev-ankit/sandcastle#ank/codex-app-server-agent' tsx
+```
+
+Then scaffold a Codex app-server setup:
+
+```bash
+npx sandcastle init --agent codex-app-server --model gpt-5.5
+```
+
+With pnpm:
+
+```bash
+pnpm exec sandcastle init --agent codex-app-server --model gpt-5.5
+```
+
+Add a package script:
+
+```json
+{
+  "scripts": {
+    "sandcastle": "tsx .sandcastle/main.mts"
+  }
+}
+```
+
+Run it with:
+
+```bash
+npm run sandcastle
+```
+
+For pnpm:
+
+```bash
+pnpm sandcastle
+```
 
 ## Quick start
 
@@ -810,6 +878,43 @@ agent: codex("gpt-5.4", { effort: "high" });
 | -------- | ---------------------------------------------- | ------- | --------------------------------------------------------- |
 | `effort` | `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` | —       | Codex reasoning effort level via `model_reasoning_effort` |
 | `env`    | `Record<string, string>`                       | `{}`    | Environment variables injected by this agent provider     |
+
+### `CodexAppServerOptions`
+
+The `codexAppServer()` factory uses `codex app-server --listen stdio://` instead of
+`codex exec`. This is useful when you want Sandcastle to use Codex's ChatGPT auth
+from `~/.codex/auth.json` inside the sandbox instead of passing an OpenAI API key.
+
+```typescript
+agent: codexAppServer("gpt-5.5", { effort: "low" });
+```
+
+| Option   | Type                                           | Default | Description                                           |
+| -------- | ---------------------------------------------- | ------- | ----------------------------------------------------- |
+| `effort` | `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` | —       | Codex app-server effort value                         |
+| `env`    | `Record<string, string>`                       | `{}`    | Environment variables injected by this agent provider |
+
+#### Reusing Existing ChatGPT Auth
+
+When using ChatGPT auth, mount `~/.codex/auth.json` into the sandbox and set
+`CODEX_HOME` to the mounted directory, for example:
+
+```typescript
+docker({
+  mounts: [
+    {
+      hostPath: `${process.env.HOME}/.codex/auth.json`,
+      sandboxPath: "~/.codex/auth.json",
+      readonly: true,
+    },
+  ],
+  env: { CODEX_HOME: "/home/agent/.codex" },
+});
+```
+
+The runner answers app-server token refresh requests by rereading the mounted
+`auth.json` file from disk. It does not perform a browser login or refresh the
+ChatGPT session itself.
 
 ### Provider `env`
 

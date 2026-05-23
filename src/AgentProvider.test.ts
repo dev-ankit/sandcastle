@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { claudeCode, codex, opencode, pi } from "./AgentProvider.js";
+import {
+  claudeCode,
+  codex,
+  codexAppServer,
+  opencode,
+  pi,
+} from "./AgentProvider.js";
 import type { AgentCommandOptions } from "./AgentProvider.js";
 
 /** Shorthand: build options with dangerouslySkipPermissions: true (mirrors existing sandbox callers). */
@@ -688,6 +694,83 @@ describe("codex factory", () => {
 });
 
 // ---------------------------------------------------------------------------
+// codexAppServer factory
+// ---------------------------------------------------------------------------
+
+describe("codexAppServer factory", () => {
+  it("returns a provider with name 'codex-app-server'", () => {
+    const provider = codexAppServer("gpt-5.5");
+    expect(provider.name).toBe("codex-app-server");
+  });
+
+  it("buildPrintCommand imports the packaged runner and passes the model", () => {
+    const provider = codexAppServer("gpt-5.5");
+    const { command } = provider.buildPrintCommand(opts("do something"));
+    expect(command).toContain("@ai-hero/sandcastle/codex-app-server-runner");
+    expect(command).toContain("--model 'gpt-5.5'");
+  });
+
+  it("buildPrintCommand delivers prompt via stdin, not argv", () => {
+    const provider = codexAppServer("gpt-5.5");
+    const { command, stdin } = provider.buildPrintCommand(opts("it's a test"));
+    expect(command).not.toContain("it's a test");
+    expect(stdin).toBe("it's a test");
+  });
+
+  it("buildPrintCommand includes effort when specified", () => {
+    const provider = codexAppServer("gpt-5.5", { effort: "low" });
+    const { command } = provider.buildPrintCommand(opts("do something"));
+    expect(command).toContain("--effort 'low'");
+  });
+
+  it("buildPrintCommand omits effort when not specified", () => {
+    const provider = codexAppServer("gpt-5.5");
+    const { command } = provider.buildPrintCommand(opts("do something"));
+    expect(command).not.toContain("--effort");
+  });
+
+  it("parseStreamLine extracts text from app-server deltas", () => {
+    const provider = codexAppServer("gpt-5.5");
+    const line = JSON.stringify({
+      type: "item.delta",
+      item: { type: "agent_message_delta", text: "Hello" },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "text", text: "Hello" },
+    ]);
+  });
+
+  it("parseStreamLine extracts result from app-server completed messages", () => {
+    const provider = codexAppServer("gpt-5.5");
+    const line = JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text: "Done" },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "result", result: "Done" },
+    ]);
+  });
+
+  it("parseStreamLine extracts tool calls from app-server command execution", () => {
+    const provider = codexAppServer("gpt-5.5");
+    const line = JSON.stringify({
+      type: "item.started",
+      item: { type: "command_execution", command: "npm test" },
+    });
+    expect(provider.parseStreamLine(line)).toEqual([
+      { type: "tool_call", name: "Bash", args: "npm test" },
+    ]);
+  });
+
+  it("accepts an env option and exposes it on the provider", () => {
+    const provider = codexAppServer("gpt-5.5", {
+      env: { CODEX_HOME: "/home/agent/.codex" },
+    });
+    expect(provider.env).toEqual({ CODEX_HOME: "/home/agent/.codex" });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // opencode factory
 // ---------------------------------------------------------------------------
 
@@ -759,7 +842,9 @@ describe("opencode factory", () => {
   });
 
   it("buildPrintCommand shell-escapes the variant value", () => {
-    const provider = opencode("opencode/big-pickle", { variant: "it's tricky" });
+    const provider = opencode("opencode/big-pickle", {
+      variant: "it's tricky",
+    });
     const { command } = provider.buildPrintCommand(opts("test"));
     expect(command).toContain("--variant 'it'\\''s tricky'");
   });

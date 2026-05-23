@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
-import { once } from "node:events";
+import { once, type EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+
+const DEFAULT_CODEX_HOME = "/home/agent/.codex";
 
 interface ParsedArgs {
   readonly model?: string;
@@ -14,38 +16,90 @@ interface PendingRequest {
   readonly reject: (error: Error) => void;
 }
 
-export async function runCli(argv = process.argv.slice(1)): Promise<void> {
+interface AppServerProcess extends EventEmitter {
+  readonly stdin: NodeJS.WritableStream;
+  readonly stdout: NodeJS.ReadableStream;
+  readonly stderr: NodeJS.ReadableStream;
+  kill(signal?: NodeJS.Signals): boolean;
+}
+
+type SpawnAppServer = (
+  command: string,
+  args: string[],
+  options: {
+    readonly env: NodeJS.ProcessEnv;
+    readonly stdio: ["pipe", "pipe", "pipe"];
+  },
+) => AppServerProcess;
+
+interface RunCliOptions {
+  readonly spawn?: SpawnAppServer;
+  readonly stdin?: NodeJS.ReadableStream;
+  readonly stdout?: NodeJS.WritableStream;
+  readonly stderr?: NodeJS.WritableStream;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly cwd?: () => string;
+  readonly exit?: (code: number) => void;
+}
+
+export async function runCli(
+  argv = getDefaultCliArgs(process.argv),
+  options: RunCliOptions = {},
+): Promise<void> {
   const args = parseArgs(argv);
-  const prompt = await readStdin();
+  const prompt = await readStdin(options.stdin ?? process.stdin);
 
   if (!args.model) {
     throw new Error("Missing required --model argument.");
   }
 
-  if (process.env.OPENAI_KEY && !process.env.OPENAI_API_KEY) {
-    process.env.OPENAI_API_KEY = process.env.OPENAI_KEY;
+  const runnerEnv: NodeJS.ProcessEnv = { ...(options.env ?? process.env) };
+  if (runnerEnv.OPENAI_KEY && !runnerEnv.OPENAI_API_KEY) {
+    runnerEnv.OPENAI_API_KEY = runnerEnv.OPENAI_KEY;
   }
+  runnerEnv.CODEX_HOME ??= DEFAULT_CODEX_HOME;
+  runnerEnv.NO_COLOR = "1";
 
-  const appServer = spawn("codex", ["app-server", "--listen", "stdio://"], {
-    env: {
-      ...process.env,
-      CODEX_HOME: process.env.CODEX_HOME ?? "/home/agent/.codex",
-      NO_COLOR: "1",
+  const spawnAppServer =
+    options.spawn ??
+    ((command, commandArgs, spawnOptions) =>
+      spawn(command, commandArgs, spawnOptions) as AppServerProcess);
+  const output = options.stdout ?? process.stdout;
+  const errorOutput = options.stderr ?? process.stderr;
+  const getCwd = options.cwd ?? (() => process.cwd());
+  const exit =
+    options.exit ??
+    ((code: number) => {
+      process.exit(code);
+    });
+
+  const appServer = spawnAppServer(
+    "codex",
+    ["app-server", "--listen", "stdio://"],
+    {
+      env: runnerEnv,
+      stdio: ["pipe", "pipe", "pipe"],
     },
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  );
 
   let nextRequestId = 1;
   let threadId: string | null = null;
   let activeTurnId: string | null = null;
   let exited = false;
   const pendingRequests = new Map<number, PendingRequest>();
+  let resolveFinished!: () => void;
+  const finished = new Promise<void>((resolve) => {
+    resolveFinished = resolve;
+  });
 
-  appServer.stderr.pipe(process.stderr);
+  appServer.stderr.pipe(errorOutput);
 
   const stdoutLines = createInterface({ input: appServer.stdout });
   stdoutLines.on("line", (line) => {
-    void handleAppServerLine(line);
+    void handleAppServerLine(line).catch(async (error: unknown) => {
+      emitError(error instanceof Error ? error.message : String(error));
+      await shutdown(1);
+    });
   });
 
   appServer.on("exit", (code, signal) => {
@@ -53,9 +107,11 @@ export async function runCli(argv = process.argv.slice(1)): Promise<void> {
       return;
     }
 
+    exited = true;
     const reason = signal ? `signal ${signal}` : `exit code ${code ?? 0}`;
     emitError(`codex app-server exited before the turn completed (${reason}).`);
-    process.exit(code ?? 1);
+    exit(code ?? 1);
+    resolveFinished();
   });
 
   try {
@@ -75,7 +131,7 @@ export async function runCli(argv = process.argv.slice(1)): Promise<void> {
 
     const threadStart = await request("thread/start", {
       model: args.model,
-      cwd: process.cwd(),
+      cwd: getCwd(),
       approvalPolicy: "never",
       approvalsReviewer: "user",
       sandbox: "danger-full-access",
@@ -93,12 +149,12 @@ export async function runCli(argv = process.argv.slice(1)): Promise<void> {
     const turnStart = await request("turn/start", {
       threadId,
       input: [{ type: "text", text: prompt, text_elements: [] }],
-      cwd: process.cwd(),
+      cwd: getCwd(),
       approvalPolicy: "never",
       approvalsReviewer: "user",
       sandboxPolicy: { type: "dangerFullAccess" },
       model: args.model,
-      effort: args.effort ?? null,
+      ...(args.effort ? { effort: args.effort } : {}),
     });
 
     activeTurnId = getNestedString(turnStart, ["turn", "id"]);
@@ -107,12 +163,14 @@ export async function runCli(argv = process.argv.slice(1)): Promise<void> {
     await shutdown(1);
   }
 
+  await finished;
+
   function request(method: string, params: unknown): Promise<unknown> {
     const id = nextRequestId++;
-    appServer.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
 
     return new Promise((resolve, reject) => {
       pendingRequests.set(id, { resolve, reject });
+      appServer.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
     });
   }
 
@@ -219,7 +277,7 @@ export async function runCli(argv = process.argv.slice(1)): Promise<void> {
   function respondWithCurrentAuthTokens(id: number): void {
     try {
       const authPath = join(
-        process.env.CODEX_HOME ?? "/home/agent/.codex",
+        runnerEnv.CODEX_HOME ?? DEFAULT_CODEX_HOME,
         "auth.json",
       );
       const auth = JSON.parse(readFileSync(authPath, "utf8"));
@@ -320,7 +378,7 @@ export async function runCli(argv = process.argv.slice(1)): Promise<void> {
   }
 
   function emit(event: unknown): void {
-    process.stdout.write(`${JSON.stringify(event)}\n`);
+    output.write(`${JSON.stringify(event)}\n`);
   }
 
   function emitError(message: string): void {
@@ -346,21 +404,37 @@ export async function runCli(argv = process.argv.slice(1)): Promise<void> {
       // Best-effort shutdown.
     }
 
-    process.exit(code);
+    exit(code);
+    resolveFinished();
   }
 }
 
-function parseArgs(argv: readonly string[]): ParsedArgs {
+export function getDefaultCliArgs(processArgv: readonly string[]): string[] {
+  const [, firstArg, ...rest] = processArgv;
+
+  if (firstArg === undefined) {
+    return [];
+  }
+
+  const args =
+    firstArg === "[eval]" || firstArg === "--" || !firstArg.startsWith("-")
+      ? rest
+      : [firstArg, ...rest];
+
+  return args[0] === "--" ? args.slice(1) : args;
+}
+
+export function parseArgs(argv: readonly string[]): ParsedArgs {
   const parsed: { model?: string; effort?: string } = {};
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--model") {
-      parsed.model = argv[++i];
+      parsed.model = readArgValue(argv, ++i, arg);
       continue;
     }
     if (arg === "--effort") {
-      parsed.effort = argv[++i];
+      parsed.effort = readArgValue(argv, ++i, arg);
       continue;
     }
     throw new Error(`Unknown argument: ${arg}`);
@@ -369,9 +443,21 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   return parsed;
 }
 
-async function readStdin(): Promise<string> {
+function readArgValue(
+  argv: readonly string[],
+  index: number,
+  flag: string,
+): string {
+  const value = argv[index];
+  if (value === undefined || value.startsWith("--")) {
+    throw new Error(`Missing value for ${flag}.`);
+  }
+  return value;
+}
+
+async function readStdin(input: NodeJS.ReadableStream): Promise<string> {
   const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
+  for await (const chunk of input) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return Buffer.concat(chunks).toString("utf8");

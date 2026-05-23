@@ -228,7 +228,6 @@ OPENAI_KEY=`,
     envExample: `# Optional OpenAI API key fallback.
 # To use Codex ChatGPT auth, mount ~/.codex/auth.json into the sandbox
 # and set CODEX_HOME to that mounted directory.
-OPENAI_KEY=
 OPENAI_API_KEY=`,
   },
   {

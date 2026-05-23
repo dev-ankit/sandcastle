@@ -24,6 +24,7 @@ const makeDir = () => mkdtemp(join(tmpdir(), "init-service-"));
 const claudeCodeAgent = getAgent("claude-code")!;
 const piAgent = getAgent("pi")!;
 const codexAgent = getAgent("codex")!;
+const codexAppServerAgent = getAgent("codex-app-server")!;
 const opencodeAgent = getAgent("opencode")!;
 
 const defaultOptions: ScaffoldOptions = {
@@ -93,6 +94,16 @@ describe("Agent registry", () => {
     expect(agent!.dockerfileTemplate).toContain("@openai/codex");
   });
 
+  it("getAgent returns codex-app-server entry with expected fields", () => {
+    const agent = getAgent("codex-app-server");
+    expect(agent).toBeDefined();
+    expect(agent!.name).toBe("codex-app-server");
+    expect(agent!.defaultModel).toBe("gpt-5.5");
+    expect(agent!.factoryImport).toBe("codexAppServer");
+    expect(agent!.dockerfileTemplate).toContain("FROM");
+    expect(agent!.dockerfileTemplate).toContain("@openai/codex");
+  });
+
   it("listAgents includes opencode", () => {
     const agents = listAgents();
     expect(agents.some((a) => a.name === "opencode")).toBe(true);
@@ -147,6 +158,12 @@ describe("InitService scaffold", () => {
       agent: codexAgent,
       expectedKey: "OPENAI_KEY=",
       unexpectedKey: "ANTHROPIC_API_KEY=",
+      expectIssue191Link: false,
+    },
+    {
+      agent: codexAppServerAgent,
+      expectedKey: "OPENAI_API_KEY=",
+      unexpectedKey: "OPENAI_KEY=",
       expectIssue191Link: false,
     },
     {

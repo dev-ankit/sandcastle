@@ -811,6 +811,37 @@ agent: codex("gpt-5.4", { effort: "high" });
 | `effort` | `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` | —       | Codex reasoning effort level via `model_reasoning_effort` |
 | `env`    | `Record<string, string>`                       | `{}`    | Environment variables injected by this agent provider     |
 
+### `CodexAppServerOptions`
+
+The `codexAppServer()` factory uses `codex app-server --listen stdio://` instead of
+`codex exec`. This is useful when you want Sandcastle to use Codex's ChatGPT auth
+from `~/.codex/auth.json` inside the sandbox instead of passing an OpenAI API key.
+
+```typescript
+agent: codexAppServer("gpt-5.5", { effort: "low" });
+```
+
+| Option   | Type                                           | Default | Description                                           |
+| -------- | ---------------------------------------------- | ------- | ----------------------------------------------------- |
+| `effort` | `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` | —       | Codex app-server effort value                         |
+| `env`    | `Record<string, string>`                       | `{}`    | Environment variables injected by this agent provider |
+
+When using ChatGPT auth, mount `~/.codex/auth.json` into the sandbox and set
+`CODEX_HOME` to the mounted directory, for example:
+
+```typescript
+docker({
+  mounts: [
+    {
+      hostPath: `${process.env.HOME}/.codex/auth.json`,
+      sandboxPath: "~/.codex/auth.json",
+      readonly: true,
+    },
+  ],
+  env: { CODEX_HOME: "/home/agent/.codex" },
+});
+```
+
 ### Provider `env`
 
 Both **agent providers** and **sandbox providers** accept an optional `env: Record<string, string>` in their options. These environment variables are merged with the `.sandcastle/.env` resolver output at launch time:

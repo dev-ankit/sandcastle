@@ -21,7 +21,11 @@ const TOOL_ARG_FIELDS: Record<string, string> = {
 const extractErrorMessage = (obj: any): string | undefined => {
   const err = obj.error;
   if (typeof err === "string") return err;
-  if (typeof err === "object" && err !== null && typeof err.message === "string") {
+  if (
+    typeof err === "object" &&
+    err !== null &&
+    typeof err.message === "string"
+  ) {
     return err.message;
   }
   if (typeof obj.message === "string") return obj.message;
@@ -295,6 +299,88 @@ export const codex = (
 
   parseStreamLine(line: string): ParsedStreamEvent[] {
     return parseCodexStreamLine(line);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Codex app-server agent provider
+// ---------------------------------------------------------------------------
+
+const parseCodexAppServerStreamLine = (line: string): ParsedStreamEvent[] => {
+  if (!line.startsWith("{")) return [];
+  try {
+    const obj = JSON.parse(line);
+
+    if (
+      obj.type === "item.completed" &&
+      obj.item?.type === "agent_message" &&
+      typeof obj.item.text === "string"
+    ) {
+      return [{ type: "result", result: obj.item.text }];
+    }
+
+    if (
+      obj.type === "item.delta" &&
+      obj.item?.type === "agent_message_delta" &&
+      typeof obj.item.text === "string"
+    ) {
+      return [{ type: "text", text: obj.item.text }];
+    }
+
+    if (
+      obj.type === "item.started" &&
+      obj.item?.type === "command_execution" &&
+      typeof obj.item.command === "string"
+    ) {
+      return [{ type: "tool_call", name: "Bash", args: obj.item.command }];
+    }
+
+    if (obj.type === "error") {
+      const msg = extractErrorMessage(obj);
+      return msg ? [{ type: "result", result: msg }] : [];
+    }
+  } catch {
+    // Not valid JSON — skip
+  }
+  return [];
+};
+
+/** Options for the codex app-server agent provider. */
+export interface CodexAppServerOptions {
+  readonly effort?: "low" | "medium" | "high" | "xhigh";
+  /** Environment variables injected by this agent provider. */
+  readonly env?: Record<string, string>;
+}
+
+export const codexAppServer = (
+  model: string,
+  options?: CodexAppServerOptions,
+): AgentProvider => ({
+  name: "codex-app-server",
+  env: options?.env ?? {},
+  captureSessions: false,
+
+  buildPrintCommand({ prompt }: AgentCommandOptions): PrintCommand {
+    const importRunner =
+      "import('@ai-hero/sandcastle/codex-app-server-runner').then(({ runCli }) => runCli()).catch((error) => { console.error(error instanceof Error ? error.stack ?? error.message : String(error)); process.exit(1); })";
+    const effortArg = options?.effort
+      ? ` --effort ${shellEscape(options.effort)}`
+      : "";
+
+    return {
+      command: `node --input-type=module -e ${shellEscape(importRunner)} -- --model ${shellEscape(model)}${effortArg}`,
+      stdin: prompt,
+    };
+  },
+
+  buildInteractiveArgs({ prompt }: AgentCommandOptions): string[] {
+    const args = ["codex", "--model", model];
+    if (prompt) args.push(prompt);
+    return args;
+  },
+
+  parseStreamLine(line: string): ParsedStreamEvent[] {
+    return parseCodexAppServerStreamLine(line);
   },
 });
 

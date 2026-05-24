@@ -50,13 +50,13 @@ Changes in this fork:
 Install the fork under the normal package name:
 
 ```bash
-npm install --save-dev '@ai-hero/sandcastle@github:dev-ankit/sandcastle#ank/codex-app-server-agent' tsx
+npm install --save-dev '@ai-hero/sandcastle@github:dev-ankit/sandcastle' tsx
 ```
 
 With pnpm:
 
 ```bash
-pnpm add --save-dev '@ai-hero/sandcastle@github:dev-ankit/sandcastle#ank/codex-app-server-agent' tsx
+pnpm add --save-dev '@ai-hero/sandcastle@github:dev-ankit/sandcastle' tsx
 ```
 
 Then scaffold a Codex app-server setup:
